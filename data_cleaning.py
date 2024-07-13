@@ -28,7 +28,7 @@ class DataCleaning:
     def sort_date_format(self):
         self.df['date_of_birth'] = pd.to_datetime(self.df['date_of_birth'], errors='coerce')
         self.df['join_date'] = pd.to_datetime(self.df['join_date'], errors='coerce')
-        return self.df
+        return self.df 
 
-
-   
+    def clean_card_data(self):
+        pass
