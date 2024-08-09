@@ -1,3 +1,12 @@
 db_creds.yaml
 local_creds.yaml
-
+card_data_cleaned.csv
+card_data.csv
+events_data_cleaned.csv
+events_data.csv
+orders_data_cleaned.csv
+orders_data.csv
+products_data_cleaned.csv
+products_data.csv
+stores_data_cleaned.csv
+stores_data.csv
