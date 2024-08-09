@@ -46,7 +46,7 @@ Running this script will execute the data processing pipeline, which involves ex
 
 ## File Structure
 
-
+```markdown
 The project directory is structured as follows:
 
 multinational-retail-data-centralisation/
@@ -55,7 +55,7 @@ multinational-retail-data-centralisation/
 ├── data_extraction.py         # Extracts data from various sources
 ├── main.py                    # Main script orchestrating the process
 └── README.md                  # Project README file
-
+```
 
 ## License
 
