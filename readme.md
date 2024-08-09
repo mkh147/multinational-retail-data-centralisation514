@@ -46,7 +46,7 @@ Running this script will execute the data processing pipeline, which involves ex
 
 ## File Structure
 
-```markdown
+
 The project directory is structured as follows:
 
 multinational-retail-data-centralisation/
