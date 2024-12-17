@@ -1,75 +1,151 @@
+import pandas as pd
+import tabula
+import requests
 from database_utils import DatabaseConnector
 from data_extraction import DataExtractor
-from data_cleaning import  DataCleaning
-import pandas as pd
-from pandasgui import show
+from data_cleaning import DataCleaning
 
-db_connector = DatabaseConnector()
-db_extractor = DataExtractor()
-db_cleaning = DataCleaning()
+def main():
+    # Initialize the DatabaseConnector for the local database
+    db_connector = DatabaseConnector(db_creds='db_creds.yml')
 
-dataframe = db_extractor.read_rds_table(db_connector.list_db_tables()[2], db_connector.init_db_engine())
+    # Initialize the DatabaseConnector for the RDS database
+    rds_db_connector = DatabaseConnector(db_creds='rds_db_creds.yml')
 
-cleaned_dataframe = data_cleaning.clean_user_data(dataframe)
+    # Initialize the DataExtractor
+    data_extractor = DataExtractor(db_connector)
+    rds_data_extractor = DataExtractor(rds_db_connector)
 
+    # Initialize the DataCleaning
+    data_cleaning = DataCleaning()
 
-db_connector.upload_to_db(cleaned_dataframe, 'dim_users')
+    # --- Extract and clean user data from the database ---
+    try:
+        rds_tables = rds_db_connector.list_db_tables()
+        user_data_table = next((table for table in rds_tables if 'user' in table.lower()), None)
 
-card_data_link ="https://data-handling-public.s3.eu-west-1.amazonaws.com/card_details.pdf"
+        if user_data_table:
+            print("Table containing user data:", user_data_table)
+            user_data_df = rds_data_extractor.read_rds_table(user_data_table)
+            cleaned_user_data_df = data_cleaning.clean_user_data(user_data_df)
+            db_connector.upload_to_db(cleaned_user_data_df, 'dim_users')
+            print(cleaned_user_data_df)
+        else:
+            print('No table containing user data found.')
+    except Exception as e:
+        print(f"Error processing user data: {e}")
 
-card_data_df = db_extractor.retrieve_pdf_data(card_data_link)
-card_data_df.to_csv('card_data.csv')
+    # --- Extract and clean card data from a PDF ---
+    try:
+        pdf_link = 'https://data-handling-public.s3.eu-west-1.amazonaws.com/card_details.pdf'
+        card_data_df = data_extractor.retrieve_pdf_data(pdf_link)
+        print('Extracted Data:')
+        print(card_data_df)
 
-card_data_df = pd.read_csv('card_data.csv')
-card_data_df_cleaned = db_cleaning.clean_card_data(card_data_df)
-card_data_df_cleaned.to_csv('card_data_cleaned.csv')
+        if not card_data_df.empty:
+            cleaned_card_data = data_cleaning.clean_card_data(card_data_df)
+            print("Cleaned Data:", cleaned_card_data)
+            db_connector.upload_to_db(cleaned_card_data, 'dim_card_details')
+            print("Cleaned card data has been uploaded to the 'dim_card_details' table in the 'sales_data' database.")
+        else:
+            print("No data extracted from the PDF.")
+    except Exception as e:
+        print(f"Error processing card data: {e}")
 
-db_connector.upload_to_db(card_data_df_cleaned, 'dim_card_details')
+    # --- Extract and clean store data from the API ---
+    try:
+        store_details_endpoint = 'https://aqj7u5id95.execute-api.eu-west-1.amazonaws.com/prod/store_details/{store_number}'
+        all_store_data = data_extractor.retrieve_stores_data(store_details_endpoint)
+        
+        all_store_data.to_csv('extracted_store_data.csv', index=False)
+        print("Extracted Store Data:")
+        print(all_store_data)
 
-number_of_stores_endpoint = "https://aqj7u5id95.execute-api.eu-west-1.amazonaws.com/prod/number_stores"
-store_details_endpoint = "https://aqj7u5id95.execute-api.eu-west-1.amazonaws.com/prod/store_details/{store_number}"
-api_key = "yFBQbwXe9J3sd6zWVAMrK6lcxxr0q1lr2PT6DDMX"
+        cleaned_store_data = data_cleaning.clean_store_data(all_store_data)
+        cleaned_store_data.to_csv('cleaned_store_data.csv', index=False)
+        print("Cleaned Store Data:")
+        print(cleaned_store_data)
 
-number_of_stores = db_extractor.list_number_of_stores(number_of_stores_endpoint, api_key)
-print(number_of_stores)
-stores_df = db_extractor.retrieve_stores_data(store_details_endpoint, api_key, number_of_stores)
-stores_df.to_csv('stores_data.csv')
+        cleaned_store_data.reset_index(drop=True, inplace=True)
+        if 'index' in cleaned_store_data.columns:
+            cleaned_store_data.drop(columns=['index'], inplace=True)
 
-stores_df = pd.read_csv('stores_data.csv')
-stores_df_cleaned = db_cleaning.clean_store_data(stores_df)
-db_connector.upload_to_db(stores_df_cleaned, 'dim_store_details')
-stores_df_cleaned.to_csv('stores_data_cleaned.csv')
+        print("DataFrame columns before uploading:")
+        print(cleaned_store_data.columns)
 
-s3_address = 's3://data-handling-public/products.csv'
-products_df = db_extractor.extract_from_s3(s3_address)
-products_df.to_csv('products_data.csv')
+        db_connector.upload_to_db(cleaned_store_data, 'dim_store_details')
+        print("Cleaned store data has been uploaded to the 'dim_store_details' table in the 'sales_data' database.")
+    except Exception as e:
+        print(f"Error processing store data: {e}")
 
-products_df = pd.read_csv('products_data.csv')
-products_df_dropped = db_cleaning.clean_products_data(products_df)
-products_df_cleaned = db_cleaning.convert_product_weights(products_df_dropped)
-products_df_cleaned.to_csv('products_data_cleaned.csv')
-db_connector.upload_to_db(products_df_cleaned, 'dim_products')
+    # --- Extract and clean product data from S3 ---
+    try:
+        s3_address = 's3://data-handling-public/products.csv'
+        products_data_df = data_extractor.extract_from_s3(s3_address)
+        print("Extracted Products Data:")
+        print(products_data_df)
 
-tables = db_connector.list_db_tables()
-print(tables)
-orders_data = db_extractor.read_rds_table(db_connector.list_db_tables()[3], db_connector.init_db_engine())
-orders_data.to_csv('orders_data.csv')
+        products_data_df['product_price'] = products_data_df['product_price'].astype(str)
+        products_data_df['product_price_clean'] = products_data_df['product_price'].str.replace('£', '').str.replace(',', '')
+        products_data_df['product_price_numeric_check'] = products_data_df['product_price_clean'].apply(lambda x: x.replace('.', '', 1).isdigit())
+        non_numeric_prices = products_data_df[~products_data_df['product_price_numeric_check']]
+        print("Problematic Rows:")
+        print(non_numeric_prices)
+        products_data_df = products_data_df[products_data_df['product_price_numeric_check']]
 
-orders_df = pd.read_csv('orders_data.csv')
+        if not products_data_df.empty:
+            cleaned_products_data = data_cleaning.clean_products_data(products_data_df)
+            print("Cleaned Products Data:")
+            print(cleaned_products_data)
+            db_connector.upload_to_db(cleaned_products_data, 'dim_products')
+            print("Cleaned products data has been uploaded to the 'dim_products' table in the 'sales_data' database.")
+        else:
+            print("No product data extracted from S3.")
+    except Exception as e:
+        print(f"Error processing product data: {e}")
 
-orders_data_cleaned_df = db_cleaning.clean_orders_data(orders_df)
-orders_data_cleaned_df.to_csv('orders_data_cleaned.csv')
+    # --- Extract and clean orders data from RDS database ---
+    try:
+        rds_tables = rds_db_connector.list_db_tables()
+        orders_table = 'orders_table'
 
-db_connector.upload_to_db(orders_data_cleaned_df, 'orders_table')
+        if orders_table in rds_tables:
+            print("Table containing orders data:", orders_table)
+            orders_df = rds_data_extractor.read_rds_table(orders_table)
+            print("Extracted Orders Data:")
+            print(orders_df)
 
-url = 'https://data-handling-public.s3.eu-west-1.amazonaws.com/date_details.json'
+            cleaned_orders_df = data_cleaning.clean_orders_data(orders_df)
+            print("Cleaned Orders Data:")
+            print(cleaned_orders_df)
 
-events_data = db_extractor.extract_JSON_file(url)
-events_data.to_csv('events_data.csv')
+            db_connector.upload_to_db(cleaned_orders_df, 'orders_table')
+            print("Cleaned orders data has been uploaded to the 'orders_table'.")
+        else:
+            print(f'Table {orders_table} not found in RDS database.')
+    except Exception as e:
+        print(f"Error processing orders data: {e}")
 
+    # --- Extract and clean date data from JSON ---
+    try:
+        json_url = 'https://data-handling-public.s3.eu-west-1.amazonaws.com/date_details.json'
+        date_data_df = data_extractor.extract_json_data(json_url)
+        print("Extracted Date Data:")
+        print(date_data_df)
 
-events_df = pd.read_csv('events_data.csv')
-events_df_cleaned = db_cleaning.clean_events_data(events_df)
-events_df_cleaned.to_csv('events_data_cleaned.csv')
+        print("Columns in the extracted date data:")
+        print(date_data_df.columns)
 
-db_connector.upload_to_db(events_df_cleaned, 'dim_date_times')
+        if not date_data_df.empty:
+            cleaned_date_data = data_cleaning.clean_date_data(date_data_df)
+            print("Cleaned Date Data:")
+            print(cleaned_date_data)
+            db_connector.upload_to_db(cleaned_date_data, 'dim_date_times')
+            print("Cleaned date data has been uploaded to the 'dim_date_times' table in the 'sales_data' database.")
+        else:
+            print("No date data extracted from JSON.")
+    except Exception as e:
+        print(f"Error processing date data: {e}")
+
+if __name__ == "__main__":
+    main()
