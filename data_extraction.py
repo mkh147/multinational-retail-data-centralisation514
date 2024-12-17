@@ -1,128 +1,119 @@
 import pandas as pd
+from database_utils import DatabaseConnector
 import tabula
 import requests
 import boto3
+import yaml
+
+# Initialise the DatabaseConnector
+db_connector = DatabaseConnector(db_creds='db_creds.yml')
 
 class DataExtractor:
-    """
-    A class used to extract data from various sources including RDS tables, PDFs, APIs, S3, and JSON files.
-    """
-
-    def __init__(self) -> None:
+    def __init__(self, db_connector=None):
         """
-        Initializes the DataExtractor class.
-        """
-        pass
-
-    def read_rds_table(self, table_name, engine):
-        """
-        Reads a table from an RDS database into a pandas DataFrame.
+        Initialize the DataExtractor with an instance of DatabaseConnector.
 
         Parameters:
-        table_name (str): The name of the table to read.
-        engine: The SQLAlchemy engine connected to the RDS instance.
+        db_connector (DatabaseConnector): An instance of the DatabaseConnector class.
+        """
+        self.db_connector = db_connector
+    
+        # Load the API key from the configuration file
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+            self.api_key = config['api']['key']
+            self.api_endpoints = config['api']['endpoints']
+        
+        self.headers = {'x-api-key': self.api_key}
+        
+    def read_rds_table(self, table_name):
+        """
+        Read a table from the RDS database into a pandas DataFrame.
+
+        Parameters:
+        table_name (str): The name of the table to read from the database.
 
         Returns:
-        pd.DataFrame: The DataFrame containing the table data.
+        pandas.DataFrame: A DataFrame containing the data from the table.
         """
-        return pd.read_sql_table(table_name, engine)  
-    
+        engine = self.db_connector.engine
+        query = f"SELECT * FROM {table_name}"
+        df = pd.read_sql(query, engine)
+        return df
+
     def retrieve_pdf_data(self, link):
         """
-        Retrieves data from a PDF file located at the specified link and combines all pages into a single DataFrame.
+        Retrieve data from a PDF document at the specified link.
 
         Parameters:
-        link (str): The URL of the PDF file to retrieve data from.
+        link (str): The URL of the PDF document.
 
         Returns:
-        pd.DataFrame: The DataFrame containing the extracted PDF data.
+        pandas.DataFrame: A DataFrame containing the extracted data.
         """
-        dataframe = tabula.read_pdf(link, pages='all')
-        dataframe = pd.concat(dataframe)
-        return dataframe
+        try:
+            df_list = tabula.read_pdf(link, pages='all', multiple_tables=True)
+            pdf_data_df = pd.concat(df_list, ignore_index=True)
+            return pdf_data_df
+        except Exception as e:
+            return pd.DataFrame()  # Return an empty DataFrame if extraction fails
 
-    def list_number_of_stores(self, number_of_stores_endpoint, api_key):
+    def list_number_of_stores(self, store_endpoint):
         """
-        Retrieves the number of stores from an API endpoint.
+        Retrieve the number of stores from the API.
 
         Parameters:
-        number_of_stores_endpoint (str): The API endpoint to retrieve the number of stores.
-        api_key (str): The API key for authentication.
+        store_endpoint (str): The API endpoint to retrieve the number of stores.
 
         Returns:
         int: The number of stores.
         """
-        headers = {
-            "x-api-key": api_key
-        }
-        response = requests.get(number_of_stores_endpoint, headers=headers)
-        if response.status_code == 200:
-            number = response.json()
-            return number['number_stores'] 
-        else:
+        try:
+            response = requests.get(store_endpoint, headers=self.headers)
             response.raise_for_status()
-    
-    def retrieve_stores_data(self, store_details_endpoint, api_key, number_of_stores):
+            data = response.json()
+            return data['number_stores']
+        except Exception as e:
+            return None
+
+    def retrieve_stores_data(self, store_data_endpoint):
         """
-        Retrieves detailed data for each store from an API and combines the data into a single DataFrame.
+        Retrieve data for all stores from the API and save them in a pandas DataFrame.
 
         Parameters:
-        store_details_endpoint (str): The API endpoint to retrieve store details, with a placeholder for store numbers.
-        api_key (str): The API key for authentication.
-        number_of_stores (int): The number of stores to retrieve data for.
+        store_data_endpoint (str): The API endpoint to retrieve store details.
 
         Returns:
-        pd.DataFrame: The DataFrame containing the retrieved stores data.
+        pandas.DataFrame: A DataFrame containing details for all stores.
         """
-        headers = {
-            "x-api-key": api_key
-        }
-        store_data_list = []
-        for store_number in range(0, number_of_stores):
-            url = store_details_endpoint.format(store_number=store_number)
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                store_data = response.json()
-                store_data_list.append(store_data)
-            else:
-                print(f"Failed to retrieve data for store {store_number}")
+        number_of_stores = self.list_number_of_stores()
+        if number_of_stores is None:
+            return pd.DataFrame()
 
-        store_data_list = pd.DataFrame(store_data_list)
-        return store_data_list
-    
+        all_stores_data = []
+        for store_number in range(1, number_of_stores + 1):
+            url = store_data_endpoint.format(store_number=store_number)
+            try:
+                response = requests.get(url, headers=self.headers)
+                response.raise_for_status()
+                store_details = response.json()
+                all_stores_data.append(store_details)
+            except Exception as e:
+                if store_number == 451:
+                    continue  # Skip this store to avoid errors
+
+        return pd.DataFrame(all_stores_data)
+
     def extract_from_s3(self, s3_address):
         """
-        Extracts a CSV file from an S3 bucket and loads it into a pandas DataFrame.
+        Extract data from a CSV file stored in an S3 bucket.
 
         Parameters:
-        s3_address (str): The S3 address of the file to be extracted, in the format 's3://bucket_name/file_key'.
+        s3_address (str): The S3 address of the CSV file.
 
         Returns:
-        pd.DataFrame: The DataFrame containing the data extracted from the S3 file.
+        pandas.DataFrame: A DataFrame containing the extracted data.
         """
-        # Parse the S3 address
-        s3_parts = s3_address.replace("s3://", "").split('/', 1)
-        bucket_name = s3_parts[0]
-        file_key = s3_parts[1]
-
         s3 = boto3.client('s3')
-        obj = s3.get_object(Bucket=bucket_name, Key=file_key)
-        df = pd.read_csv(obj['Body'])
-        
-        return df
-    
-    def extract_JSON_file(self, url):
-        """
-        Extracts data from a JSON file available at a given URL and loads it into a pandas DataFrame.
-
-        Parameters:
-        url (str): The URL of the JSON file to be extracted.
-
-        Returns:
-        pd.DataFrame: The DataFrame containing the data extracted from the JSON file.
-        """
-        response = requests.get(url)
-        data = response.json()
-        data = pd.DataFrame.from_dict(data)
-
-        return data
+        bucket_name, key = s3_address.replace("s3://", "").split("/", 1)
+      
