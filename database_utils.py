@@ -1,96 +1,92 @@
 import yaml
-import sqlalchemy
-import psycopg2
+from sqlalchemy import create_engine, text
+import pandas as pd
 
 class DatabaseConnector:
-    """
-    A class used to manage connections to a database, including reading credentials, initializing a database engine,
-    listing tables, and uploading data to the database.
-    """
+    def __init__(self, db_creds='/Users/carlajcostan/Documents/AI Core/multinational-retail-data-centralisation728/db_creds.yml'):
+        """ 
+        Initialises the DatabaseConnector with the path to the DB credentials containing file.
 
-    def __init__(self) -> None:
+        Parameters:
+        db_cred(str): The path to the YML file containing the credentials.
+                      Defaults to db_creds.yml. 
         """
-        Initializes the DatabaseConnector class.
-        """
-        pass
+        self.db_creds = db_creds
+        self.engine = self.init_db_engine()
 
-    def read_db_creds(self):
+    def _read_db_creds(self) -> dict:
         """
-        Reads database credentials from a YAML file named 'db_creds.yaml'.
+        Read the database credentials from the YAML file and return them as a dictionary.
 
         Returns:
         dict: A dictionary containing the database credentials.
-
-        Raises:
-        yaml.YAMLError: If there is an error reading the YAML file.
         """
-        try: 
-            with open("db_creds.yaml", 'r') as credentials:
-                return yaml.safe_load(credentials)
-        except yaml.YAMLError as exc:
-            print(exc)
-
-    def read_local_creds(self):
-        """
-        Reads local database credentials from a YAML file named 'local_creds.yaml'.
-
-        Returns:
-        dict: A dictionary containing the local database credentials.
-
-        Raises:
-        yaml.YAMLError: If there is an error reading the YAML file.
-        """
-        try: 
-            with open("local_creds.yaml", 'r') as credentials:
-                return yaml.safe_load(credentials)
-        except yaml.YAMLError as exc:
-            print(exc)
+        with open(self.db_creds, 'r') as file:
+            creds = yaml.safe_load(file)
+        return creds    
     
     def init_db_engine(self):
         """
-        Initializes a SQLAlchemy engine using the database credentials read from 'db_creds.yaml'.
+        Initialize and return an SQLAlchemy engine using the database credentials.
 
         Returns:
-        sqlalchemy.engine.base.Engine: The initialized SQLAlchemy engine.
+        sqlalchemy.engine.Engine: An SQLAlchemy engine object.
         """
-        db_creds = self.read_db_creds()
-        engine = sqlalchemy.create_engine(
-            f"{db_creds['DATABASE_TYPE']}+{db_creds['DBAPI']}://{db_creds['RDS_USER']}:{db_creds['RDS_PASSWORD']}@{db_creds['RDS_HOST']}:{db_creds['RDS_PORT']}/{db_creds['RDS_DATABASE']}",
-            isolation_level="AUTOCOMMIT"
-        )
+        DATABASE_TYPE = 'postgresql'
+        DBAPI = 'psycopg2'
+        creds = self._read_db_creds()
+        engine = create_engine(f"{DATABASE_TYPE}+{DBAPI}://{creds['RDS_USER']}:{creds['RDS_PASSWORD']}@{creds['RDS_HOST']}:{creds['RDS_PORT']}/{creds['RDS_DATABASE']}")
         return engine
-
+    
     def list_db_tables(self):
         """
-        Lists all tables in the database connected via the initialized engine.
+        List all tables in the database.
 
         Returns:
-        list: A list of table names in the database.
+        tables: A list of table names in the database.
         """
-        engine = self.init_db_engine()
-        inspector = sqlalchemy.inspect(engine)
-        tables = inspector.get_table_names()
+        with self.engine.connect() as connection:
+            query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            result = connection.execute(text(query))
+            tables = [row[0] for row in result]
         return tables
-
-    def upload_to_db(self, df, table_name):
+    
+    def get_table_columns(self, table_name):
         """
-        Uploads a DataFrame to the database, replacing the table if it already exists.
+        Get the column names for a specific table in the database.
 
         Parameters:
-        df (pd.DataFrame): The DataFrame to upload.
-        table_name (str): The name of the table in the database.
+        table_name (str): The name of the table to get columns from.
 
         Returns:
-        None
+        columns: A list of column names in the table.
         """
-        db_creds = self.read_local_creds()
-        engine = sqlalchemy.create_engine(
-            f"{db_creds['DATABASE_TYPE']}+{db_creds['DBAPI']}://{db_creds['RDS_USER']}:{db_creds['RDS_PASSWORD']}@{db_creds['RDS_HOST']}:{db_creds['RDS_PORT']}/{db_creds['RDS_DATABASE']}",
-            isolation_level="AUTOCOMMIT"
-        )
-        df.to_sql(table_name, con=engine, if_exists='replace') # use 'replace' if you want to overwrite the existing table, 'fail' if you want to throw an error when attempting to overwrite       
+        with self.engine.connect() as connection:
+            query = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'"
+            result = connection.execute(text(query))
+            columns = [row[0] for row in result]
+        return columns
+    
+    def upload_to_db(self, df, table_name, database_name='sales_data', username='postgres', password='230200', host='localhost', port='5432'):
+        """
+        Upload a Pandas DataFrame to the specified table in the specified database.
+
+        Parameters:
+        df (pandas.DataFrame): The DataFrame to upload.
+        table_name (str): The name of the table to upload the DataFrame to.
+        database_name (str): The name of the database to connect to. Defaults to 'sales_data'.
+        username (str): The username to connect to the database. Defaults to 'your_username'.
+        password (str): The password to connect to the database. Defaults to 'your_password'.
+        host (str): The host address of the database. Defaults to 'localhost'.
+        port (str): The port number of the database. Defaults to '5432'.
+        """
+        DATABASE_TYPE = 'postgresql'
+        DBAPI = 'psycopg2'
+
+        engine = create_engine(f"{DATABASE_TYPE}+{DBAPI}://{username}:{password}@{host}:{port}/{database_name}")
+
+        with engine.connect() as connection:
+            df.to_sql(table_name, connection, if_exists='replace', index=False)
 
 if __name__ == "__main__":
-    database_connector = DatabaseConnector()
-    print(database_connector.read_db_creds())
-    print(database_connector.list_db_tables())
+    DatabaseConnector()
